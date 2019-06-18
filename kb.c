@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <wiringPi.h>
+#include "usb_hid_keycodes.h"
 
 /***************************************************************
 pin 0 => 17
