@@ -1,3 +1,24 @@
+/*
+ * File : kb.c
+ * Created: June 2019
+ * By: Colin Atkinson, EVOZ Pty Ltd
+ *
+ * Notes: This littpe program scans a sonder keyboard and creates an HID report.
+ * The keyboard is arranged in rows and columns. A pair of 74HS959 shift registers are used to set each column line
+ * high then each row is read. Each row is connected directly to a gpio pin and is enumberated in scan_pins.
+ * The rpi scan pins do not equate to the same gpio pin. eg gpio pin 17 is mapped to rpi pin 0
+ *
+ * At the end of a complete scan a HID report is generated and sent
+ *
+ * HID reports are 8 bytes long.
+ * The first bype is the modifier (shift, ctrl etc). zero if not used
+ * The second byte is reserved and not used
+ * The next 6 bytes are the HID coded allowing for 'chording'. If more than 6 keys are depressed an error is generated
+ * Auto repeat is performed in the host which means that if no null report is sent after a key is released the host
+ * will assume the key is still pressed.
+ *
+ */
+
 #include <stdio.h>
 #include <wiringPi.h>
 #include "usb_hid_keycodes.h"
@@ -44,6 +65,10 @@ void set_one(int pin);
 void set_all(int pin);
 #define NCOLS 16
 #define NROWS 9
+#define TRUE 1
+#define FALSE 0
+#define MIN_KEY_SCAN 1 // number of consecutive times a key has to be scanned to eliminate key bounce
+#define MAX_SLOTS 6 // number of slots for key presses in hid report
 
 char *kbval[NROWS][NCOLS] = {
 	{ "XX","esc","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12","f13"},
@@ -54,13 +79,27 @@ char *kbval[NROWS][NCOLS] = {
 	{"XX6","fn","ctl","opt","com","space","rcom","ropt","X","x2","x3","x4"}
 };
 
+unsigned char hidval[NROWS][NCOLS] = {
+	{ 0,KEY_ESC,KEY_F1,KEY_F2,KEY_F3,KEY_F4,KEY_F5,KEY_F6,KEY_F7,KEY_F8,KEY_F9,KEY_F10,KEY_F11,KEY_F12,KEY_F13},
+	{ 0,KEY_APOSTROPHE,KEY_1,KEY_2,KEY_3,KEY_4,KEY_5,KEY_6,KEY_7,KEY_8,KEY_9,KEY_0,KEY_MINUS,KEY_EQUAL,KEY_BACKSPACE},
+	{0,KEY_TAB,KEY_Q,KEY_W,KEY_E,KEY_R,KEY_T,KEY_Y,KEY_U,KEY_I,KEY_O,KEY_P,KEY_LEFTBRACE,KEY_RIGHTBRACE,KEY_BACKSLASH},
+	{0,KEY_CAPSLOCK,KEY_Q,KEY_S,KEY_D,KEY_F,KEY_G,KEY_H,KEY_J,KEY_K,KEY_L,KEY_SEMICOLON,KEY_APOSTROPHE,KEY_ENTER,0},
+	{0,KEY_LEFTSHIFT,KEY_Z,KEY_X,KEY_C,KEY_V,KEY_B,KEY_N,KEY_M,KEY_COMMA,KEY_DOT,KEY_SLASH,KEY_RIGHTSHIFT},
+/*	{0,KEY_fn,KEY_ctl,KEY_opt,KEY_com,KEY_space,KEY_rcom,KEY_ropt,KEY_X,KEY_x2,KEY_x3,KEY_x4} */
+};
+
 
 typedef struct key_summary {
 	char *kbval;
-	int count;
+	char hidval;
+	int modifier; // modifies other keys
+	int count; // number of times key press has been scanned
+	int slot; // location in HID REPORT - 0 to 5
+	char up; // was pressed last scan, not this one. May not be needed
 } key_summary;
 
 key_summary keys[NROWS][NCOLS];
+char hid_report[8]; // HID report sent to host
 
 void init_key_summary()
 {
@@ -70,8 +109,12 @@ int i,j;
 		for (j = 0; j < NCOLS; j++) {
 			keys[i][j].count = 0;
 			keys[i][j].kbval = kbval [i][i];
+			keys[i][j].up = FALSE;
+			keys[i][j].modifier = 0;
 		}
 	}
+	// define modifier keys
+	keys[4][1] = KEY_MOD_LSHIFT; // 0x02
 }
 
 char *get_kbval(int row,int col)
@@ -85,17 +128,81 @@ char *get_kbval(int row,int col)
 	return(s);
 }
 
+char get_hidval(int row,int col)
+{
+	char hid;
+	if (row >=0 && row <= NROWS && col >= 0 && col < NCOLS) {
+		hid = hidval[row ][col];
 
+	}
+	else hid = 0;
+	return(hid);
+}
+
+int send_error_report()
+{ // TODO
+	return(0);
+}
+int construct_hid_report()
+{
+	int i,j,error = 0;
+	int next_slot = 0;
+	char new_report[8];
+	int change = FALSE;
+	for (i = 0; i < MAX_SLOTS; i++) {
+		if (hid_report[i + 2] == 0)
+			next_slot = i;
+	}
+	if (next_slot == -1) { // no free slots - too many meys pressed. Send error report
+		printf("too many keys pressed\n");
+		send_error_report();
+		return(TRUE);
+	}
+	for (i = 0; i < NROWS; i++) {
+		for (j = 0; j < NCOLS; j++) {
+			if (keys[i][j].modifier > 0 && keys[i][j].count >= MIN_KEY_SCAN) {
+				hid_report[0] |= keys[i][j].modifier;
+			}
+			if (keys[i][j].count == MIN_KEY_SCAN) {
+				// printf("%s (%d,%d)\n",kb_str,col,i);
+				keys[i][j].slot = next_slot;
+				for (i = next_slot + 1; i < MAX_SLOTS; i++) {
+					if (hid_report[i + 2] == 0) {
+						next_slot = i;
+					}
+					if (next_slot < MAX_SLOTS) {
+						hid_report[keys[i][j].slot + 2] = keys[i][j].hidval;
+					}
+					else {
+						printf("not free slots - too many keys pressed\n");
+						send_error_report();
+						return(TRUE);
+					}
+				}
+				change = TRUE;
+			}
+			else if (keys[i][j].up == TRUE) {
+				hid_report[keys[i][j].slot + 2] = 0;
+				keys[i][j].slot = -1;
+				keys[i][j].up = FALSE;
+				change = TRUE;
+			}
+		}
+	}
+	if (change) send_hid_report();
+	return(error);
+}
 
 void show_pins()
 {
 int i,pinno;
 
 	for (i = 0; i < 26; i++) {
-                        pinno = wpiPinToGpio(i);
-                        printf("pin %d => %d\n",i,pinno);
-        }
+		pinno = wpiPinToGpio(i);
+		printf("pin %d => %d\n",i,pinno);
+	}
 }
+
 int main (void)
 {
 int i;
@@ -250,13 +357,15 @@ int scan_inputs(int col)
 			if (keys[i][col].count == 1) {
 				printf("%s (%d,%d)\n",kb_str,col,i);
 			}
-			keys[i][col].kbval = kb_str; // shouldn't be needed - something wrong in init
+			keys[i][col].hidval = get_hidval(i,col);; // shouldn't be needed - something wrong in init
 			keys[i][col].count++;
+			keys[i][col].up = FALSE;
 		}
 		else {
 			if (keys[i][col].count) {
 				printf ("%s up (%d,%d, count %d)\n",keys[i][col].kbval,col,i,keys[i][col].count);
 				keys[i][col].count = 0;
+				keys[i][col].up = TRUE;
 			}
 		}
 	}
