@@ -20,6 +20,8 @@
  */
 
 #include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <wiringPi.h>
 #include "usb_hid_keycodes.h"
 
@@ -65,8 +67,10 @@ void set_one(int pin);
 void set_all(int pin);
 #define NCOLS 16
 #define NROWS 9
+#ifndef TRUE
 #define TRUE 1
 #define FALSE 0
+#endif
 #define MIN_KEY_SCAN 1 // number of consecutive times a key has to be scanned to eliminate key bounce
 #define MAX_SLOTS 6 // number of slots for key presses in hid report
 
@@ -101,6 +105,11 @@ typedef struct key_summary {
 key_summary keys[NROWS][NCOLS];
 char hid_report[8]; // HID report sent to host
 
+void clear_report()
+{
+int i;
+    for (i = 0; i < 8; i++) hid_report[i] = 0;
+}
 void init_key_summary()
 {
 int i,j;
@@ -139,8 +148,19 @@ char get_hidval(int row,int col)
 	return(hid);
 }
 
+int send_hid_report()
+{
+    int fd = open("/dev/hidg0", O_RDWR);
+
+	write(fd,&hid_report[0],8);
+
+	close (fd);
+}
 int send_error_report()
 { // TODO
+	printf("ERROR!!!!!!!\n\n\n\n");
+	clear_report();
+	send_hid_report();
 	return(0);
 }
 int construct_hid_report()
