@@ -74,7 +74,7 @@ void set_all(int pin);
 #define MIN_KEY_SCAN 1 // number of consecutive times a key has to be scanned to eliminate key bounce
 #define MAX_SLOTS 6 // number of slots for key presses in hid report
 
-char *kbval[NROWS][NCOLS] = {
+char *kbstr[NROWS][NCOLS] = {
 	{ "XX","esc","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12","f13"},
 	{ "XX2","`","1","2","3","4","5","6","7","8","9","0","-","=","del"},
 	{"XX3","tab","q","w","e","r","t","y","u","i","o","p","[","]","\\"},
@@ -94,7 +94,7 @@ unsigned char hidval[NROWS][NCOLS] = {
 
 
 typedef struct key_summary {
-	char *kbval;
+	char *kbstr;
 	char hidval;
 	int modifier; // modifies other keys
 	int count; // number of times key press has been scanned
@@ -117,20 +117,20 @@ int i,j;
 	for (i = 0; i < NROWS; i++) {
 		for (j = 0; j < NCOLS; j++) {
 			keys[i][j].count = 0;
-			keys[i][j].kbval = kbval [i][i];
+			keys[i][j].kbstr = kbstr [i][i];
 			keys[i][j].up = FALSE;
 			keys[i][j].modifier = 0;
 		}
 	}
 	// define modifier keys
-	keys[4][1] = KEY_MOD_LSHIFT; // 0x02
+	keys[4][1].hidval = KEY_MOD_LSHIFT; // 0x02
 }
 
-char *get_kbval(int row,int col)
+char *get_kbstr(int row,int col)
 {
 	char *s;
 	if (row >=0 && row <= NROWS && col >= 0 && col < NCOLS) {
-		s = kbval[row ][col];
+		s = kbstr[row ][col];
 		if (!s) s = "not defined";
 	}
 	else s = "error";
@@ -150,11 +150,20 @@ char get_hidval(int row,int col)
 
 int send_hid_report()
 {
-    int fd = open("/dev/hidg0", O_RDWR);
+	int i;
 
+    int fd = open("/dev/hidg0", O_RDWR);
+   printf("sending report : ");
+	for (i = 0; i < 8; i++) printf("%02x ",hid_report[i]);
+	printf("\n");
+	if (!fd) {
+		printf(" could not open fd\n");
+		return(0);
+	}
 	write(fd,&hid_report[0],8);
 
 	close (fd);
+	return(TRUE);
 }
 int send_error_report()
 { // TODO
@@ -163,11 +172,11 @@ int send_error_report()
 	send_hid_report();
 	return(0);
 }
+
 int construct_hid_report()
 {
-	int i,j,error = 0;
+	int i,j,k,error = 0;
 	int next_slot = 0;
-	char new_report[8];
 	int change = FALSE;
 	for (i = 0; i < MAX_SLOTS; i++) {
 		if (hid_report[i + 2] == 0)
@@ -184,20 +193,19 @@ int construct_hid_report()
 				hid_report[0] |= keys[i][j].modifier;
 			}
 			if (keys[i][j].count == MIN_KEY_SCAN) {
-				// printf("%s (%d,%d)\n",kb_str,col,i);
 				keys[i][j].slot = next_slot;
-				for (i = next_slot + 1; i < MAX_SLOTS; i++) {
-					if (hid_report[i + 2] == 0) {
-						next_slot = i;
+				for (k = next_slot + 1; k < MAX_SLOTS; k++) {
+					if (hid_report[k + 2] == 0) {
+						next_slot = k;
 					}
-					if (next_slot < MAX_SLOTS) {
-						hid_report[keys[i][j].slot + 2] = keys[i][j].hidval;
-					}
-					else {
-						printf("not free slots - too many keys pressed\n");
-						send_error_report();
-						return(TRUE);
-					}
+				}
+				if (next_slot < MAX_SLOTS) {
+					hid_report[next_slot + 2] = keys[i][j].hidval;
+				}
+				else {
+					printf("not free slots - too many keys pressed\n");
+					send_error_report();
+					return(TRUE);
 				}
 				change = TRUE;
 			}
@@ -363,19 +371,18 @@ rpi seems to need delays between setting pins - might be because the pi does no 
 		digitalWrite(PIN_SRCLK, HIGH);
 		digitalWrite(PIN_SRCLK, LOW);
 	}
+	construct_hid_report();
 	return(count);
 }
 
 int scan_inputs(int col)
 {
-	char *kb_str;
-
-	int i,count = 0;
+int i,count = 0;
 	for (i = 0; i < nscan_pins; i++) {
 		if (digitalRead(scan_pins[i])) {
-			kb_str = get_kbval(i,col);
+			keys[i][col].kbstr = get_kbstr(i,col);
 			if (keys[i][col].count == 1) {
-				printf("%s (%d,%d)\n",kb_str,col,i);
+				printf("%s (%d,%d)\n",keys[i][col].kbstr,col,i);
 			}
 			keys[i][col].hidval = get_hidval(i,col);; // shouldn't be needed - something wrong in init
 			keys[i][col].count++;
@@ -383,7 +390,7 @@ int scan_inputs(int col)
 		}
 		else {
 			if (keys[i][col].count) {
-				printf ("%s up (%d,%d, count %d)\n",keys[i][col].kbval,col,i,keys[i][col].count);
+				printf ("%s up (%d,%d, count %d)\n",keys[i][col].kbstr,col,i,keys[i][col].count);
 				keys[i][col].count = 0;
 				keys[i][col].up = TRUE;
 			}
