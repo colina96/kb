@@ -3,7 +3,7 @@
  * Created: June 2019
  * By: Colin Atkinson, EVOZ Pty Ltd
  *
- * Notes: This littpe program scans a sonder keyboard and creates an HID report.
+ * Notes: This scans a sonder keyboard and creates an HID report.
  * The keyboard is arranged in rows and columns. A pair of 74HS959 shift registers are used to set each column line
  * high then each row is read. Each row is connected directly to a gpio pin and is enumberated in scan_pins.
  * The rpi scan pins do not equate to the same gpio pin. eg gpio pin 17 is mapped to rpi pin 0
@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 #include <wiringPi.h>
 #include "usb_hid_keycodes.h"
 
@@ -59,13 +60,13 @@ pin 25 => 26
 #define PIN_SER 2
 #define PIN_RCLOCK 0
 #define PIN_SRCLK 3
-int scan_pins[] = {1,4,5,6,15,10,11};
-int nscan_pins = 7;
+int scan_pins[] = {1,4,5,6,15,10,11,28,29};
+int nscan_pins = 9;
 int scan_inputs(int row);
 int scan();
 void set_one(int pin);
 void set_all(int pin);
-#define NCOLS 16
+#define NCOLS 17
 #define NROWS 9
 #ifndef TRUE
 #define TRUE 1
@@ -79,16 +80,19 @@ char *kbstr[NROWS][NCOLS] = {
 	{ "XX2","`","1","2","3","4","5","6","7","8","9","0","-","=","del"},
 	{"XX3","tab","q","w","e","r","t","y","u","i","o","p","[","]","\\"},
 	{"XX4""caps","a","s","d","f","g","h","j","k","l",";","'","return","na"},
-	{"XX5""lshift","z","x","c","v","b","n","m",",",".","/","rshift"},
-	{"XX6","fn","ctl","opt","com","space","rcom","ropt","X","x2","x3","x4"}
+	{"XX5","XX6","lshift","z","x","c","v","b","n","m",",",".","/","rshift"},
+	{"XX6","fn","ctl","opt","com","space","rcom","ropt","X","x2","x3","x4"},
+	{"6-0","6-1","6-2","6-3","6-4","6-5","6-6","6-7","6-8","6-9"}
 };
 
 unsigned char hidval[NROWS][NCOLS] = {
 	{ 0,KEY_ESC,KEY_F1,KEY_F2,KEY_F3,KEY_F4,KEY_F5,KEY_F6,KEY_F7,KEY_F8,KEY_F9,KEY_F10,KEY_F11,KEY_F12,KEY_F13},
 	{ 0,KEY_APOSTROPHE,KEY_1,KEY_2,KEY_3,KEY_4,KEY_5,KEY_6,KEY_7,KEY_8,KEY_9,KEY_0,KEY_MINUS,KEY_EQUAL,KEY_BACKSPACE},
 	{0,KEY_TAB,KEY_Q,KEY_W,KEY_E,KEY_R,KEY_T,KEY_Y,KEY_U,KEY_I,KEY_O,KEY_P,KEY_LEFTBRACE,KEY_RIGHTBRACE,KEY_BACKSLASH},
-	{0,KEY_CAPSLOCK,KEY_Q,KEY_S,KEY_D,KEY_F,KEY_G,KEY_H,KEY_J,KEY_K,KEY_L,KEY_SEMICOLON,KEY_APOSTROPHE,KEY_ENTER,0},
-	{0,KEY_LEFTSHIFT,KEY_Z,KEY_X,KEY_C,KEY_V,KEY_B,KEY_N,KEY_M,KEY_COMMA,KEY_DOT,KEY_SLASH,KEY_RIGHTSHIFT},
+	{0,KEY_CAPSLOCK,KEY_A,KEY_S,KEY_D,KEY_F,KEY_G,KEY_H,KEY_J,KEY_K,KEY_L,KEY_SEMICOLON,KEY_APOSTROPHE,KEY_ENTER,0},
+	{0,0,KEY_LEFTSHIFT,KEY_Z,KEY_X,KEY_C,KEY_V,KEY_B,KEY_N,KEY_M,KEY_COMMA,KEY_DOT,KEY_SLASH,KEY_RIGHTSHIFT},
+	{0,0,0,0,0,0,0,0,0,0},
+	{0,0,0,0,KEY_A,KEY_S,KEY_D,KEY_SPACE}
 /*	{0,KEY_fn,KEY_ctl,KEY_opt,KEY_com,KEY_space,KEY_rcom,KEY_ropt,KEY_X,KEY_x2,KEY_x3,KEY_x4} */
 };
 
@@ -103,7 +107,7 @@ typedef struct key_summary {
 } key_summary;
 
 key_summary keys[NROWS][NCOLS];
-char hid_report[8]; // HID report sent to host
+char hid_report[10]; // HID report sent to host
 
 void clear_report()
 {
@@ -175,31 +179,18 @@ int send_error_report()
 
 int construct_hid_report()
 {
-	int i,j,k,error = 0;
+	int i,j,error = 0;
 	int next_slot = 0;
 	int change = FALSE;
-	for (i = 0; i < MAX_SLOTS; i++) {
-		if (hid_report[i + 2] == 0)
-			next_slot = i;
-	}
-	if (next_slot == -1) { // no free slots - too many meys pressed. Send error report
-		printf("too many keys pressed\n");
-		send_error_report();
-		return(TRUE);
-	}
+	while (hid_report[next_slot + 2] && next_slot < MAX_SLOTS) next_slot++;
 	for (i = 0; i < NROWS; i++) {
 		for (j = 0; j < NCOLS; j++) {
 			if (keys[i][j].modifier > 0 && keys[i][j].count >= MIN_KEY_SCAN) {
 				hid_report[0] |= keys[i][j].modifier;
 			}
 			if (keys[i][j].count == MIN_KEY_SCAN) {
-				keys[i][j].slot = next_slot;
-				for (k = next_slot + 1; k < MAX_SLOTS; k++) {
-					if (hid_report[k + 2] == 0) {
-						next_slot = k;
-					}
-				}
 				if (next_slot < MAX_SLOTS) {
+					keys[i][j].slot = next_slot;
 					hid_report[next_slot + 2] = keys[i][j].hidval;
 				}
 				else {
@@ -207,6 +198,7 @@ int construct_hid_report()
 					send_error_report();
 					return(TRUE);
 				}
+				while (hid_report[next_slot + 2] && next_slot < MAX_SLOTS) next_slot++;
 				change = TRUE;
 			}
 			else if (keys[i][j].up == TRUE) {
@@ -231,7 +223,7 @@ int i,pinno;
 	}
 }
 
-int main (void)
+int main (int argc, char **argv)
 {
 int i;
 int pinno;
@@ -239,7 +231,11 @@ char c;
 int debug = 0;
 
 	wiringPiSetup () ;
-	for (i = 0; i < 26; i++) {
+	if (argc > 1 && !strcmp(argv[1],"-d")) {
+		printf("debug mode\n\n");
+		debug = 1;
+	}
+	for (i = 0; i < 40; i++) {
 			pinno = wpiPinToGpio(i);
 			printf("pin %d => %d\n",i,pinno);
 	}
@@ -353,7 +349,7 @@ rpi seems to need delays between setting pins - might be because the pi does no 
 	delay(1); // not sure this is needed but little harm
 	digitalWrite(PIN_SER,	LOW);
 	delay(1); // not sure this is needed but little harm
-	for (i = 0; i < 16;i ++) {
+	for (i = 0; i < 17;i ++) {
 		 count += scan_inputs(i);
 /*
 		 digitalWrite(PIN_RCLOCK, HIGH);
