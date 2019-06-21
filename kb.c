@@ -235,7 +235,7 @@ int debug = 0;
 		printf("debug mode\n\n");
 		debug = 1;
 	}
-	for (i = 0; i < 40; i++) {
+	for (i = 0; i < 34; i++) {
 			pinno = wpiPinToGpio(i);
 			printf("pin %d => %d\n",i,pinno);
 	}
